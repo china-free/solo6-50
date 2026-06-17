@@ -4,6 +4,7 @@ export class SoundGenerator {
     this.masterGain = null
     this.oscillators = []
     this.noiseNode = null
+    this.timers = []
     this.isPlaying = false
     this.volume = 0.3
     this.currentSound = null
@@ -39,6 +40,8 @@ export class SoundGenerator {
       try { this.noiseNode.stop() } catch (e) {}
       this.noiseNode = null
     }
+    this.timers.forEach(id => clearInterval(id))
+    this.timers = []
     this.isPlaying = false
     this.currentSound = null
   }
@@ -102,12 +105,13 @@ export class SoundGenerator {
     noise.start()
     this.noiseNode = noise
 
-    setInterval(() => {
+    const intervalId = setInterval(() => {
       if (!this.isPlaying || this.currentSound !== 'rain') return
       gain.gain.setValueAtTime(0.15, this.audioContext.currentTime)
       gain.gain.linearRampToValueAtTime(0.2, this.audioContext.currentTime + 0.5)
       gain.gain.linearRampToValueAtTime(0.15, this.audioContext.currentTime + 1)
     }, 3000)
+    this.timers.push(intervalId)
   }
 
   playOcean() {
@@ -140,7 +144,8 @@ export class SoundGenerator {
       filter.frequency.linearRampToValueAtTime(300, now + 6)
     }
     modulate()
-    setInterval(modulate, 6000)
+    const intervalId = setInterval(modulate, 6000)
+    this.timers.push(intervalId)
   }
 
   playForest() {
@@ -182,12 +187,14 @@ export class SoundGenerator {
       this.oscillators.push(osc)
     }
 
-    setInterval(() => {
+    const intervalId = setInterval(() => {
       if (Math.random() > 0.5) playBird()
     }, 4000)
+    this.timers.push(intervalId)
 
-    setTimeout(playBird, 1000)
-    setTimeout(playBird, 2500)
+    const timeout1 = setTimeout(playBird, 1000)
+    const timeout2 = setTimeout(playBird, 2500)
+    this.timers.push(timeout1, timeout2)
   }
 
   playWind() {
@@ -219,6 +226,7 @@ export class SoundGenerator {
       filter.frequency.linearRampToValueAtTime(500 + Math.random() * 200, now + 3)
     }
     modulate()
-    setInterval(modulate, 5000)
+    const intervalId = setInterval(modulate, 5000)
+    this.timers.push(intervalId)
   }
 }

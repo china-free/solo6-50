@@ -1,3 +1,4 @@
+
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { SoundGenerator } from './utils/soundGenerator'
 
@@ -124,12 +125,16 @@ export default function App() {
   useEffect(() => {
     const mode = BREATH_MODES[selectedMode]
     if (mode) {
-      setCustomDurations({
+      const newDurations = {
         inhale: mode.inhale,
         hold1: mode.hold1,
         exhale: mode.exhale,
         hold2: mode.hold2
-      })
+      }
+      setCustomDurations(newDurations)
+      if (!isRunning && !isPaused) {
+        setRemainingTime(newDurations[currentPhase] || newDurations.inhale || 4)
+      }
     }
   }, [selectedMode])
 
@@ -272,11 +277,23 @@ export default function App() {
     return () => clearTimer()
   }, [clearTimer])
 
+  useEffect(() => {
+    if (!isRunning && !isPaused) {
+      setRemainingTime(customDurations[currentPhase] || customDurations.inhale || 4)
+    }
+  }, [customDurations, currentPhase, isRunning, isPaused])
+
   const updateDuration = (key, delta) => {
-    setCustomDurations(prev => ({
-      ...prev,
-      [key]: Math.max(0, Math.min(30, prev[key] + delta))
-    }))
+    const newValue = Math.max(0, Math.min(30, customDurations[key] + delta))
+    const newDurations = { ...customDurations, [key]: newValue }
+    setCustomDurations(newDurations)
+    if (!isRunning && !isPaused) {
+      if (key === currentPhase) {
+        setRemainingTime(newValue || newDurations.inhale || 4)
+      } else if (currentPhase === 'inhale' || customDurations[currentPhase] <= 0) {
+        setRemainingTime(newDurations.inhale || 4)
+      }
+    }
   }
 
   const getCircleScale = () => {
