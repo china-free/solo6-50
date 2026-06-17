@@ -1,6 +1,16 @@
-
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { SoundGenerator } from './utils/soundGenerator'
+import {
+  getTodayStats,
+  getWeekStats,
+  getDailyGoal,
+  setDailyGoal,
+  getGoalCycles,
+  setGoalCycles,
+  saveSession,
+  formatDuration
+} from './utils/stats'
+import StatsPanel from './components/StatsPanel'
 
 const BREATH_MODES = {
   '4-7-8': {
@@ -44,30 +54,6 @@ const SOUND_OPTIONS = [
   { id: 'wind', name: '微风' }
 ]
 
-const getTodayKey = () => {
-  const d = new Date()
-  return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`
-}
-
-const loadStats = () => {
-  try {
-    const data = JSON.parse(localStorage.getItem('breathStats') || '{}')
-    const today = getTodayKey()
-    return data[today] || 0
-  } catch {
-    return 0
-  }
-}
-
-const saveStats = (count) => {
-  try {
-    const data = JSON.parse(localStorage.getItem('breathStats') || '{}')
-    const today = getTodayKey()
-    data[today] = count
-    localStorage.setItem('breathStats', JSON.stringify(data))
-  } catch {}
-}
-
 function Particles() {
   const particles = Array.from({ length: 20 }, (_, i) => ({
     id: i,
@@ -107,20 +93,33 @@ export default function App() {
   const [currentPhase, setCurrentPhase] = useState('inhale')
   const [remainingTime, setRemainingTime] = useState(4)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [statsOpen, setStatsOpen] = useState(false)
   const [isFullscreen, setIsFullscreen] = useState(false)
-  const [todayCycles, setTodayCycles] = useState(0)
   const [selectedSound, setSelectedSound] = useState('off')
   const [volume, setVolume] = useState(0.3)
   const [cyclePhase, setCyclePhase] = useState(0)
 
+  const [todayStats, setTodayStats] = useState(getTodayStats())
+  const [weekStats, setWeekStats] = useState(getWeekStats())
+  const [dailyGoal, setDailyGoalState] = useState(getDailyGoal())
+  const [goalCycles, setGoalCyclesState] = useState(getGoalCycles())
+  const [goalReached, setGoalReached] = useState(false)
+
   const soundGeneratorRef = useRef(null)
   const timerRef = useRef(null)
   const startTimeRef = useRef(null)
-  const pausedTimeRef = useRef(0)
+  const sessionStartRef = useRef(null)
+  const sessionCyclesRef = useRef(0)
+  const sessionGoalReachedRef = useRef(false)
+
+  const refreshStats = useCallback(() => {
+    setTodayStats(getTodayStats())
+    setWeekStats(getWeekStats())
+  }, [])
 
   useEffect(() => {
-    setTodayCycles(loadStats())
-  }, [])
+    refreshStats()
+  }, [refreshStats])
 
   useEffect(() => {
     const mode = BREATH_MODES[selectedMode]
@@ -136,7 +135,7 @@ export default function App() {
         setRemainingTime(newDurations[currentPhase] || newDurations.inhale || 4)
       }
     }
-  }, [selectedMode])
+  }, [selectedMode, isRunning, isPaused, currentPhase])
 
   useEffect(() => {
     if (!soundGeneratorRef.current) {
@@ -167,13 +166,35 @@ export default function App() {
     }
   }, [selectedSound])
 
+  const detectCustomMode = useCallback(() => {
+    for (const [key, mode] of Object.entries(BREATH_MODES)) {
+      if (
+        mode.inhale === customDurations.inhale &&
+        mode.hold1 === customDurations.hold1 &&
+        mode.exhale === customDurations.exhale &&
+        mode.hold2 === customDurations.hold2
+      ) {
+        return key
+      }
+    }
+    return 'custom'
+  }, [customDurations])
+
   const advanceCycle = useCallback(() => {
-    setTodayCycles(prev => {
-      const next = prev + 1
-      saveStats(next)
-      return next
-    })
-  }, [])
+    sessionCyclesRef.current += 1
+    const newCount = sessionCyclesRef.current
+
+    if (newCount >= goalCycles && !sessionGoalReachedRef.current) {
+      sessionGoalReachedRef.current = true
+      setGoalReached(true)
+      setTimeout(() => setGoalReached(false), 3000)
+    }
+
+    setTodayStats(prev => ({
+      ...prev,
+      totalCycles: prev.totalCycles + 1
+    }))
+  }, [goalCycles])
 
   const clearTimer = useCallback(() => {
     if (timerRef.current) {
@@ -182,10 +203,29 @@ export default function App() {
     }
   }, [])
 
+  const endSession = useCallback(() => {
+    if (sessionStartRef.current && (sessionCyclesRef.current > 0 || (Date.now() - sessionStartRef.current) > 5000)) {
+      const duration = (Date.now() - sessionStartRef.current) / 1000
+      saveSession({
+        startTime: sessionStartRef.current,
+        endTime: Date.now(),
+        duration,
+        cycles: sessionCyclesRef.current,
+        mode: detectCustomMode(),
+        durations: { ...customDurations },
+        sound: selectedSound
+      })
+      refreshStats()
+    }
+    sessionStartRef.current = null
+    sessionCyclesRef.current = 0
+    sessionGoalReachedRef.current = false
+  }, [customDurations, selectedSound, detectCustomMode, refreshStats])
+
   const startPhase = useCallback((phase, initialRemaining = null) => {
     clearTimer()
     const duration = customDurations[phase] || 0
-    
+
     if (duration <= 0) {
       const phases = ['inhale', 'hold1', 'exhale', 'hold2']
       const currentIdx = phases.indexOf(phase)
@@ -231,13 +271,18 @@ export default function App() {
       setIsPaused(false)
       startPhase(currentPhase, remainingTime)
     } else {
+      sessionStartRef.current = Date.now()
+      sessionCyclesRef.current = 0
+      sessionGoalReachedRef.current = false
       setIsRunning(true)
+      setGoalReached(false)
       startPhase('inhale')
     }
   }
 
   const handleStop = () => {
     clearTimer()
+    endSession()
     setIsRunning(false)
     setIsPaused(false)
     setCurrentPhase('inhale')
@@ -274,8 +319,13 @@ export default function App() {
   }, [])
 
   useEffect(() => {
-    return () => clearTimer()
-  }, [clearTimer])
+    return () => {
+      clearTimer()
+      if (sessionStartRef.current) {
+        endSession()
+      }
+    }
+  }, [clearTimer, endSession])
 
   useEffect(() => {
     if (!isRunning && !isPaused) {
@@ -294,6 +344,18 @@ export default function App() {
         setRemainingTime(newDurations.inhale || 4)
       }
     }
+  }
+
+  const handleDailyGoalChange = (delta) => {
+    const newGoal = Math.max(1, Math.min(100, dailyGoal + delta))
+    setDailyGoalState(newGoal)
+    setDailyGoal(newGoal)
+  }
+
+  const handleGoalCyclesChange = (delta) => {
+    const newCycles = Math.max(1, Math.min(50, goalCycles + delta))
+    setGoalCyclesState(newCycles)
+    setGoalCycles(newCycles)
   }
 
   const getCircleScale = () => {
@@ -322,11 +384,13 @@ export default function App() {
     return '0.3s'
   }
 
-  const circleClass = currentPhase === 'hold1' || currentPhase === 'hold2' 
-    ? 'breath-circle hold' 
-    : currentPhase === 'exhale' 
-      ? 'breath-circle exhale' 
+  const circleClass = currentPhase === 'hold1' || currentPhase === 'hold2'
+    ? 'breath-circle hold'
+    : currentPhase === 'exhale'
+      ? 'breath-circle exhale'
       : 'breath-circle'
+
+  const goalProgress = Math.min(100, (todayStats.totalCycles / Math.max(1, dailyGoal)) * 100)
 
   return (
     <div className={`app ${isFullscreen ? 'fullscreen' : ''}`}>
@@ -335,11 +399,24 @@ export default function App() {
       <div className="header">
         <h1>🌿 呼吸减压</h1>
         <div className="stats">
-          <div className="stat-item">
-            <span>今日完成</span>
-            <span className="stat-value">{todayCycles}</span>
-            <span>次</span>
+          <div className="stat-item" title={`目标: ${dailyGoal}次 (${Math.round(goalProgress)}%)`}>
+            <span>今日</span>
+            <span className="stat-value">{todayStats.totalCycles}</span>
+            <span>/{dailyGoal}</span>
           </div>
+          {todayStats.totalDuration > 0 && (
+            <div className="stat-item">
+              <span>时长</span>
+              <span className="stat-value">{formatDuration(todayStats.totalDuration)}</span>
+            </div>
+          )}
+          <button
+            className={`icon-btn ${statsOpen ? 'active' : ''}`}
+            onClick={() => { setStatsOpen(!statsOpen); setSettingsOpen(false) }}
+            title="统计"
+          >
+            📊
+          </button>
           <button
             className={`icon-btn ${isFullscreen ? 'active' : ''}`}
             onClick={handleToggleFullscreen}
@@ -349,7 +426,7 @@ export default function App() {
           </button>
           <button
             className={`icon-btn ${settingsOpen ? 'active' : ''}`}
-            onClick={() => setSettingsOpen(!settingsOpen)}
+            onClick={() => { setSettingsOpen(!settingsOpen); setStatsOpen(false) }}
             title="设置"
           >
             ⚙
@@ -375,7 +452,18 @@ export default function App() {
               <div className="timer-text">
                 {Math.ceil(remainingTime)}
               </div>
+              {isRunning && (
+                <div className="session-cycles">
+                  本次 {sessionCyclesRef.current} / {goalCycles}
+                </div>
+              )}
             </div>
+
+            {goalReached && (
+              <div className="goal-reached-toast">
+                🎉 已达成单次目标 {goalCycles} 次！
+              </div>
+            )}
           </div>
 
           <div className="cycle-indicator">
@@ -406,7 +494,7 @@ export default function App() {
         </div>
 
         <div className="instruction">
-          跟随圆圈的节奏深呼吸，让身心慢慢放松下来
+          跟随圆圈的节奏深呼吸，目标单次 {goalCycles} 循环，每日 {dailyGoal} 次
         </div>
       </div>
 
@@ -496,6 +584,18 @@ export default function App() {
             </div>
           </div>
         )}
+      </div>
+
+      <div className={`sidebar stats-sidebar ${statsOpen ? 'open' : ''}`}>
+        <StatsPanel
+          todayStats={todayStats}
+          weekStats={weekStats}
+          dailyGoal={dailyGoal}
+          goalCycles={goalCycles}
+          onDailyGoalChange={handleDailyGoalChange}
+          onGoalCyclesChange={handleGoalCyclesChange}
+          onClose={() => setStatsOpen(false)}
+        />
       </div>
     </div>
   )
